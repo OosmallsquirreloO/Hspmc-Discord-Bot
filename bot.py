@@ -459,4 +459,6 @@ async def send_calendar(channel):
 async def on_ready():
     print("Bot online")
 
+    print(TOKEN)
+
 bot.run(TOKEN)
