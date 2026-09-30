@@ -19,7 +19,7 @@ if not TOKEN:
 
 MAX_DAYS_AHEAD = 180          # 練團預約(不輸入年份)最多可預約幾天後
 CHECK_INTERVAL_SEC = 30       # 每幾秒檢查一次「活動開始 / 結束」
-MAX_FUTURE_SHOWN = 25         # 「未來」欄位最多顯示幾筆，避免超過 Embed 上限
+MAX_FUTURE_SHOWN = 15         # 「未來」欄位最多顯示幾筆，避免超過 Embed 上限
 TZ = timezone(timedelta(hours=8))  # 台灣時間 (UTC+8)，不受主機時區影響
 WEEK = "一二三四五六日"
 
@@ -99,6 +99,14 @@ CREATE TABLE IF NOT EXISTS bookings_v2 (
 # 記住每個伺服器的行事曆訊息在哪裡 (機器人重啟後也找得回來)
 conn.execute("""
 CREATE TABLE IF NOT EXISTS calendar_refs (
+    guild_id INTEGER PRIMARY KEY,
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL
+)
+""")
+# 記住選單訊息在哪裡 (!setmenu)
+conn.execute("""
+CREATE TABLE IF NOT EXISTS menu_refs (
     guild_id INTEGER PRIMARY KEY,
     channel_id INTEGER NOT NULL,
     message_id INTEGER NOT NULL
@@ -233,38 +241,48 @@ def add_field_chunked(embed: discord.Embed, name: str, items: list, sep: str = "
         embed.add_field(name=name if i == 0 else "\u200b", value=ch, inline=False)
 
 
-def practice_line(b, guild, show_date: bool) -> str:
-    when = f"📅 {fmt_date(b['d'])}　" if show_date else ""
-    return (
-        f"🎵 **{esc(b['event'])}**\n"
-        f"　{when}⏰ `{b['start_time']}–{b['end_time']}`　👤 {esc(disp_name(guild, b))}"
-    )
+def clean(text: str) -> str:
+    """放進程式碼區塊前，避免使用者輸入的 ` 把框弄壞"""
+    return text.replace("`", "'")
 
 
-def ongoing_line(b, guild) -> str:
-    name = esc(disp_name(guild, b))
+def block(lang: str, lines: list) -> str:
+    return f"```{lang}\n" + "\n".join(lines) + "\n```"
+
+
+def ongoing_block(b, guild) -> str:
+    """進行中：diff 的 + 會顯示成綠色"""
+    name = clean(disp_name(guild, b))
+    tag = "⭐ 重要活動" if b["kind"] == "event" else "🎵 練團"
+    lines = [
+        f"+ 🔴 {clean(b['event'])}　｜{tag}",
+        f"+ ⏰ {b['start_time']}–{b['end_time']}　(進行中)",
+    ]
     if b["kind"] == "event":
-        return (
-            f"⭐ **{esc(b['event'])}**　`重要活動`\n"
-            f"　📅 {fmt_date(b['d'], True)}　⏰ `{b['start_time']}–{b['end_time']}`　👤 {name}"
-        )
-    return (
-        f"🔴 **{esc(b['event'])}**\n"
-        f"　⏰ `{b['start_time']}–{b['end_time']}`　👤 {name}"
-    )
+        lines.insert(1, f"+ 📅 {fmt_date(b['d'], True)}")
+    lines.append(f"+ 👤 {name}")
+    return block("diff", lines)
 
 
 def event_block(b, guild) -> str:
-    title = b["event"].replace("`", "'")
-    name = disp_name(guild, b).replace("`", "'")
-    return (
-        "```fix\n"
-        f"✨ {title} ✨\n"
-        f"📅 {fmt_date(b['d'], True)}\n"
-        f"⏰ {b['start_time']}–{b['end_time']}\n"
-        f"👤 {name}\n"
-        "```"
-    )
+    """重要活動：fix 會顯示成黃色，並有 ✨ 外框"""
+    lines = [
+        f"✨ {clean(b['event'])} ✨",
+        f"📅 {fmt_date(b['d'], True)}",
+        f"⏰ {b['start_time']}–{b['end_time']}",
+        f"👤 {clean(disp_name(guild, b))}",
+    ]
+    return block("fix", lines)
+
+
+def practice_block(b, guild, show_date: bool = True) -> str:
+    """一般練團：ini 的 [標題] 會顯示成藍色"""
+    lines = [f"[🎵 {clean(b['event'])}]"]
+    if show_date:
+        lines.append(f"📅 {fmt_date(b['d'])}")
+    lines.append(f"⏰ {b['start_time']}–{b['end_time']}")
+    lines.append(f"👤 {clean(disp_name(guild, b))}")
+    return block("ini", lines)
 
 
 def build_embed(guild) -> discord.Embed:
@@ -287,33 +305,32 @@ def build_embed(guild) -> discord.Embed:
     if not rows:
         embed.description = f"{header}\n\n📭 目前沒有任何活動"
     else:
-        embed.description = (
-            f"{header}　·　共 **{len(rows)}** 筆預約\n"
-            "🔴 進行中　🎵 練團　⭐ 重要活動"
-        )
+        embed.description = f"{header}　·　共 **{len(rows)}** 筆預約"
 
         if ongoing:
-            add_field_chunked(embed, "🔴 進行中", [ongoing_line(b, guild) for b in ongoing])
+            add_field_chunked(
+                embed, "━━━━  🔴 進行中  ━━━━", [ongoing_block(b, guild) for b in ongoing]
+            )
 
         if events:
             add_field_chunked(
-                embed, "🌟 重要活動", [event_block(b, guild) for b in events]
+                embed, "━━━━  🌟 重要活動  ━━━━", [event_block(b, guild) for b in events]
             )
 
         add_field_chunked(
             embed,
-            "📌 今天",
-            [practice_line(b, guild, False) for b in today_p] or ["└ 今天沒有其他預約"],
+            "━━━━  📌 今天  ━━━━",
+            [practice_block(b, guild, False) for b in today_p] or ["*今天沒有其他預約*"],
         )
 
         shown = future_p[:MAX_FUTURE_SHOWN]
-        lines = [practice_line(b, guild, True) for b in shown] or ["└ 沒有未來預約"]
+        lines = [practice_block(b, guild, True) for b in shown] or ["*沒有未來預約*"]
         if len(future_p) > len(shown):
-            lines.append(f"…還有 {len(future_p) - len(shown)} 筆")
-        add_field_chunked(embed, "📅 未來", lines)
+            lines.append(f"*…還有 {len(future_p) - len(shown)} 筆*")
+        add_field_chunked(embed, "━━━━  📅 未來  ━━━━", lines)
 
     embed.set_footer(text="!book 預約　!cancel 取消　!schedule 更新行事曆")
-    embed.timestamp = discord.utils.utcnow()  # 顯示「最後更新」時間 (自動轉成各人本地時間)
+    embed.timestamp = discord.utils.utcnow()  # 顯示「最後更新」時間
     return embed
 
 
@@ -393,17 +410,28 @@ async def _refresh_saved(ref):
         print(f"更新行事曆失敗: {e}")
 
 
-async def refresh_calendar(guild=None, channel=None):
+async def refresh_calendar(guild=None, fallback_channel=None):
     """
-    有給 guild + channel：在該頻道更新 / 建立行事曆 (指令用)
-    都不給：更新所有已存在的行事曆 (自動排程用)
+    給 guild：更新該伺服器「已設定」的行事曆 (位置由 !setschedule 決定，不會亂搬)。
+              如果還沒有行事曆，且有給 fallback_channel，就在那個頻道建立一個。
+    不給參數：更新所有已存在的行事曆 (自動排程用)
     """
     async with calendar_lock:
-        if guild is not None and channel is not None:
-            await _upsert_in_channel(guild, channel)
-        else:
+        if guild is None:
             for ref in conn.execute("SELECT * FROM calendar_refs").fetchall():
                 await _refresh_saved(ref)
+            return
+        ref = get_ref(guild.id)
+        if ref:
+            await _refresh_saved(ref)
+        elif fallback_channel is not None:
+            await _upsert_in_channel(guild, fallback_channel)
+
+
+async def set_calendar_channel(guild, channel):
+    """!setschedule：把行事曆固定在這個頻道 (舊的在別的頻道會被刪掉並搬過來)"""
+    async with calendar_lock:
+        await _upsert_in_channel(guild, channel)
 
 
 # =====================
@@ -435,14 +463,17 @@ async def finish_booking(interaction, kind, d, start_s, end_s, event, is_event=F
     # 4. 存入 (以 Discord 使用者 ID 儲存)
     insert_booking(kind, d, s[1], e[1], event, interaction.user)
 
-    # 5. 成功提示 3 秒後自動刪除
+    # 5. 成功提示 (私人訊息)，3 秒後自動消失
     label = "重要活動已新增" if is_event else "預約成功"
+    note = ""
+    if interaction.guild and not get_ref(interaction.guild.id):
+        note = "\n⚠️ 尚未設定行事曆頻道，請管理員在行事曆頻道輸入 !setschedule"
     await interaction.response.send_message(
-        f"✅ {label}", ephemeral=True, delete_after=3
+        f"✅ {label}{note}", ephemeral=True, delete_after=8 if note else 3
     )
 
-    # 6. 更新行事曆 (沒有就建立)
-    await refresh_calendar(interaction.guild, interaction.channel)
+    # 6. 更新行事曆
+    await refresh_calendar(interaction.guild)
 
 
 class PracticeModal(Modal, title="預約練團"):
@@ -544,24 +575,47 @@ class BookView(View):
 
 
 # =====================
-# !cancel 選單
+# 取消選單
 # =====================
+def cancellable(member):
+    """一般人：只有自己建立的練團預約；管理員：所有預約 (含重要活動)"""
+    n = now()
+    admin = is_admin(member)
+    uid = str(member.id)
+    rows = [
+        b for b in load_bookings()
+        if b["end_dt"] > n
+        and (admin or (b["kind"] == "practice" and b["user"] == uid))
+    ]
+    return rows[:25]  # Discord 下拉選單最多 25 項
+
+
 class CancelView(View):
-    def __init__(self, owner, rows):
+    def __init__(self, owner, rows, guild):
         super().__init__(timeout=60)
         self.owner_id = owner.id
         self.selected_id = None
-        self.message = None
+        self.message = None   # 一般訊息 (用指令叫出來時)
+        self.origin = None    # 私人訊息 (用選單按鈕叫出來時)
 
+        admin = is_admin(owner)
         options = []
         for b in rows:
             is_event = b["kind"] == "event"
-            label = f"{'⭐ ' if is_event else ''}{b['event']} | {fmt_date(b['d'])} {b['start_time']}-{b['end_time']}"
+            label = (
+                f"{'⭐ ' if is_event else ''}{b['event']} | "
+                f"{fmt_date(b['d'])} {b['start_time']}-{b['end_time']}"
+            )
+            parts = []
+            if is_event:
+                parts.append(f"重要活動 · {fmt_date(b['d'], True)}")
+            if admin:
+                parts.append(f"👤 {disp_name(guild, b)}")
             options.append(
                 discord.SelectOption(
                     label=label[:100],
                     value=str(b["id"]),
-                    description=f"重要活動 · {fmt_date(b['d'], True)}" if is_event else None,
+                    description=(" · ".join(parts)[:100] or None),
                 )
             )
 
@@ -597,8 +651,8 @@ class CancelView(View):
             text = "❌ 這個項目已經不存在了"
         else:
             uid = str(interaction.user.id)
-            allowed = (row["kind"] == "practice" and row["user"] == uid) or (
-                row["kind"] == "event" and is_admin(interaction.user)
+            allowed = is_admin(interaction.user) or (
+                row["kind"] == "practice" and row["user"] == uid
             )
             if not allowed:
                 text = "❌ 你沒有權限取消這個項目"
@@ -609,7 +663,7 @@ class CancelView(View):
 
         self.stop()
         await interaction.response.edit_message(content=text, view=None)
-        await refresh_calendar(interaction.guild, interaction.channel)
+        await refresh_calendar(interaction.guild)
 
         await asyncio.sleep(3)
         try:
@@ -618,7 +672,98 @@ class CancelView(View):
             await safe_delete(interaction.message)
 
     async def on_timeout(self):
-        await safe_delete(self.message)
+        if self.origin is not None:
+            try:
+                await self.origin.delete_original_response()
+            except discord.HTTPException:
+                pass
+        else:
+            await safe_delete(self.message)
+
+
+# =====================
+# 總選單 (永久按鈕，重啟後仍有效)
+# =====================
+def menu_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🎸 熱音社預約選單",
+        description=(
+            "點下方按鈕就能操作，不需要打指令。\n"
+            "按鈕的結果只有你自己看得到，用完會自動消失。\n\n"
+            "🎵 **預約練團**　預約練團時段\n"
+            "🌟 **新增重要活動**　僅限管理員\n"
+            "🗑️ **取消我的行程**　取消自己的預約 (管理員可取消全部)\n"
+            "📋 **我的預約**　查看你自己的預約"
+        ),
+        color=0x5865F2,
+    )
+    return embed
+
+
+class MenuView(View):
+    def __init__(self):
+        super().__init__(timeout=None)  # 永久有效
+
+    @discord.ui.button(
+        label="預約練團", emoji="🎵", style=discord.ButtonStyle.green,
+        custom_id="menu:book", row=0,
+    )
+    async def book_btn(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(PracticeModal())
+
+    @discord.ui.button(
+        label="新增重要活動", emoji="🌟", style=discord.ButtonStyle.blurple,
+        custom_id="menu:event", row=0,
+    )
+    async def event_btn(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction.user):
+            return await reject(interaction, "只有管理員可以新增重要活動")
+        await interaction.response.send_modal(EventModal())
+
+    @discord.ui.button(
+        label="取消我的行程", emoji="🗑️", style=discord.ButtonStyle.red,
+        custom_id="menu:cancel", row=1,
+    )
+    async def cancel_btn(self, interaction: discord.Interaction, button: Button):
+        rows = cancellable(interaction.user)
+        if not rows:
+            return await interaction.response.send_message(
+                "❌ 你目前沒有可以取消的行程", ephemeral=True, delete_after=3
+            )
+        view = CancelView(interaction.user, rows, interaction.guild)
+        view.origin = interaction
+        await interaction.response.send_message(
+            "🗑️ 請選擇要取消的行程，再按「確認刪除」", view=view, ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="我的預約", emoji="📋", style=discord.ButtonStyle.secondary,
+        custom_id="menu:mine", row=1,
+    )
+    async def mine_btn(self, interaction: discord.Interaction, button: Button):
+        n = now()
+        uid = str(interaction.user.id)
+        mine = [b for b in load_bookings() if b["user"] == uid and b["end_dt"] > n]
+        if not mine:
+            return await interaction.response.send_message(
+                "📭 你目前沒有任何預約", ephemeral=True, delete_after=5
+            )
+
+        lines = []
+        for b in mine:
+            icon = "⭐" if b["kind"] == "event" else "🎵"
+            live = " 🔴進行中" if b["start_dt"] <= n else ""
+            lines.append(
+                f"{icon} {clean(b['event'])}{live}\n"
+                f"   📅 {fmt_date(b['d'], b['kind'] == 'event')}　"
+                f"⏰ {b['start_time']}–{b['end_time']}"
+            )
+        body = "\n\n".join(lines)[:1800]
+        await interaction.response.send_message(
+            f"📋 **我的預約** (共 {len(mine)} 筆)\n```\n{body}\n```",
+            ephemeral=True,
+            delete_after=30,
+        )
 
 
 # =====================
@@ -627,6 +772,7 @@ class CancelView(View):
 @bot.command()
 @commands.guild_only()
 async def schedule(ctx):
+    """更新行事曆 (已設定的行事曆頻道)；還沒設定就建立在這個頻道"""
     await safe_delete(ctx.message)
     cleanup_expired()
     await refresh_calendar(ctx.guild, ctx.channel)
@@ -647,22 +793,13 @@ async def book(ctx):
 async def cancel(ctx):
     await safe_delete(ctx.message)
 
-    admin = is_admin(ctx.author)
-    uid = str(ctx.author.id)
-    n = now()
-    rows = [
-        b for b in load_bookings()
-        if b["end_dt"] > n
-        and ((b["kind"] == "practice" and b["user"] == uid)
-             or (b["kind"] == "event" and admin))
-    ][:25]  # Discord 下拉選單最多 25 項
-
+    rows = cancellable(ctx.author)
     if not rows:
-        await ctx.send("❌ 你目前沒有可以取消的項目", delete_after=3)
+        await ctx.send("❌ 你目前沒有可以取消的行程", delete_after=3)
         return
 
-    view = CancelView(ctx.author, rows)
-    view.message = await ctx.send("🗑️ 請選擇要取消的項目，再按「確認刪除」", view=view)
+    view = CancelView(ctx.author, rows, ctx.guild)
+    view.message = await ctx.send("🗑️ 請選擇要取消的行程，再按「確認刪除」", view=view)
 
 
 @bot.command()
@@ -684,6 +821,53 @@ async def clearall(ctx, confirm=None):
     conn.commit()
     await ctx.send("🗑️ 已清空所有預約", delete_after=3)
     await refresh_calendar(ctx.guild, ctx.channel)
+
+
+@bot.command()
+@commands.guild_only()
+async def setmenu(ctx):
+    """(管理員) 在這個頻道建立總選單；舊的選單會被刪掉"""
+    await safe_delete(ctx.message)
+    if not is_admin(ctx.author):
+        await ctx.send("❌ 只有管理員可以使用此指令", delete_after=3)
+        return
+
+    old = conn.execute(
+        "SELECT * FROM menu_refs WHERE guild_id = ?", (ctx.guild.id,)
+    ).fetchone()
+    if old:
+        try:
+            ch = bot.get_channel(old["channel_id"]) or await bot.fetch_channel(
+                old["channel_id"]
+            )
+            old_msg = await ch.fetch_message(old["message_id"])
+            await old_msg.delete()
+        except discord.HTTPException:
+            pass
+
+    msg = await ctx.send(embed=menu_embed(), view=MenuView())
+    conn.execute(
+        "INSERT INTO menu_refs (guild_id, channel_id, message_id) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id, "
+        "message_id=excluded.message_id",
+        (ctx.guild.id, ctx.channel.id, msg.id),
+    )
+    conn.commit()
+    await ctx.send("✅ 選單已建立", delete_after=3)
+
+
+@bot.command()
+@commands.guild_only()
+async def setschedule(ctx):
+    """(管理員) 把行事曆固定在這個頻道；舊的行事曆會被刪掉並搬過來"""
+    await safe_delete(ctx.message)
+    if not is_admin(ctx.author):
+        await ctx.send("❌ 只有管理員可以使用此指令", delete_after=3)
+        return
+
+    cleanup_expired()
+    await set_calendar_channel(ctx.guild, ctx.channel)
+    await ctx.send("✅ 已將行事曆設定在此頻道", delete_after=3)
 
 
 @bot.event
@@ -739,6 +923,13 @@ async def before_midnight():
 # =====================
 # RUN
 # =====================
+async def setup_hook():
+    bot.add_view(MenuView())  # 讓重啟前發出的選單按鈕繼續有效
+
+
+bot.setup_hook = setup_hook
+
+
 @bot.event
 async def on_ready():
     print(f"Bot online: {bot.user}")
