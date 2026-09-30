@@ -688,11 +688,11 @@ def menu_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🎸 熱音社預約選單",
         description=(
-            "點下方按鈕就能操作，不需要打指令。\n"
-            "按鈕的結果只有你自己看得到，用完會自動消失。\n\n"
+            "點下面的按鈕即可進行操作。\n"
+            "按鈕的結果只有你自己看得到，用完會自動消失 i人友善。\n\n"
             "🎵 **預約練團**　預約練團時段\n"
             "🌟 **新增重要活動**　僅限管理員\n"
-            "🗑️ **取消我的行程**　取消自己的預約 (管理員可取消全部)\n"
+            "🗑️ **取消我的行程**　取消自己的預約\n"
             "📋 **我的預約**　查看你自己的預約"
         ),
         color=0x5865F2,
@@ -705,7 +705,7 @@ class MenuView(View):
         super().__init__(timeout=None)  # 永久有效
 
     @discord.ui.button(
-        label="預約練團", emoji="🎵", style=discord.ButtonStyle.green,
+        label="社辦預約", emoji="🎵", style=discord.ButtonStyle.green,
         custom_id="menu:book", row=0,
     )
     async def book_btn(self, interaction: discord.Interaction, button: Button):
