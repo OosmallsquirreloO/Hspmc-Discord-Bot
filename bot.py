@@ -786,13 +786,13 @@ class CancelView(View):
 def menu_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🎸 熱音社預約選單",
-        description="點下方按鈕就能操作，不用打指令。\n結果只有你看得到，用完會自動消失。",
+        description="點下方按鈕就能操作即可 \n結果只有你看得到，用完會自動消失 i人友善",
         color=0x5865F2,
     )
     embed.add_field(name="🏠 社辦預約", value="預約社辦使用時段", inline=False)
     embed.add_field(name="🌟 新增重要活動", value="僅限管理員", inline=False)
     embed.add_field(
-        name="🗑️ 取消我的行程", value="取消自己的預約 (管理員可取消全部)", inline=False
+        name="🗑️ 取消我的行程", value="取消自己的預約", inline=False
     )
     embed.add_field(name="📋 我的預約", value="查看你自己的預約", inline=False)
     return embed
