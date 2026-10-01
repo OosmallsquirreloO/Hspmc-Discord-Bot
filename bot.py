@@ -287,7 +287,7 @@ def parse_any_date(text: str, kind: str):
 
 
 def validate_slot(kind, d: date, start_s, end_s, exclude_id=None):
-    """檢查 時間格式 -> 合理性 -> 單次時數上限 -> 衝突。回傳 (錯誤訊息或None, 開始, 結束)"""
+    """檢查 時間格式 -> 合理性 -> 單次時數上限 -> 衝突。回傳 (錯誤訊息或 None, 開始, 結束)"""
     s, e = parse_time(start_s), parse_time(end_s)
     if not s or not e:
         return "時間格式錯誤，請用 18:00 這種格式", None, None
